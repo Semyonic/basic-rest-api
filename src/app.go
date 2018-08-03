@@ -1,22 +1,29 @@
-package api
+package main
 
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
 	"goji.io"
 	"goji.io/pat"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"log"
+	"net/http"
 )
 
 // Database config
 const (
-	URI        = "localhost"
-	DATABASE   = "store"
-	COLLECTION = "products"
+	MongoUri   = "localhost"
+	Database   = "store"
+	Collection = "products"
 )
+
+func failOnError(err error, message string) {
+	if err != nil {
+		log.Fatalf("%s: %s", message, err)
+		panic(fmt.Sprintf("%s: %s", message, err))
+	}
+}
 
 func ErrorWithJSON(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -36,10 +43,10 @@ func ResponseWithJSON(w http.ResponseWriter, json []byte, code int) {
 }*/
 
 type Product struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID    bson.ObjectId `json:"id"        bson:"_id,omitempty"`
+	Name  string        `json:"name"`
+	Price string        `json:"price"`
 	/*	Category *Category*/
-	Price string `json:"price"`
 }
 
 // Check and create index
@@ -47,7 +54,7 @@ func ensureIndex(s *mgo.Session) {
 	session := s.Copy()
 	defer session.Close()
 
-	c := session.DB("store").C("books")
+	c := session.DB(Database).C(Collection)
 
 	index := mgo.Index{
 		Key:        []string{"isbn"},
@@ -68,7 +75,7 @@ func getAllProducts(s *mgo.Session) func(w http.ResponseWriter, r *http.Request)
 		session := s.Copy()
 		defer session.Close()
 
-		c := session.DB(DATABASE).C(COLLECTION)
+		c := session.DB(Database).C(Collection)
 
 		var products []Product
 		err := c.Find(bson.M{}).All(&products)
@@ -95,10 +102,10 @@ func getProductById(s *mgo.Session) func(w http.ResponseWriter, r *http.Request)
 
 		id := pat.Param(r, "id")
 
-		c := session.DB(DATABASE).C(COLLECTION)
+		c := session.DB(Database).C(Collection)
 
 		var product Product
-		err := c.Find(bson.M{"id": id}).One(&product)
+		err := c.Find(bson.M{"_id": id}).One(&product)
 		if err != nil {
 			ErrorWithJSON(w, "Database error", http.StatusInternalServerError)
 			log.Println("Failed find product: ", err)
@@ -134,7 +141,7 @@ func createProduct(s *mgo.Session) func(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		c := session.DB(DATABASE).C(COLLECTION)
+		c := session.DB(Database).C(Collection)
 
 		err = c.Insert(product)
 		if err != nil {
@@ -149,7 +156,7 @@ func createProduct(s *mgo.Session) func(w http.ResponseWriter, r *http.Request) 
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Location", r.URL.Path+"/"+product.ID)
+		w.Header().Set("Location", r.URL.Path+"/"+string(product.ID))
 		w.WriteHeader(http.StatusCreated)
 	}
 }
@@ -162,17 +169,17 @@ func updateProductById(s *mgo.Session) func(w http.ResponseWriter, r *http.Reque
 
 		id := pat.Param(r, "id")
 
-		var book Product
+		var product Product
 		decoder := json.NewDecoder(r.Body)
-		err := decoder.Decode(&book)
+		err := decoder.Decode(&product)
 		if err != nil {
 			ErrorWithJSON(w, "Incorrect body", http.StatusBadRequest)
 			return
 		}
 
-		c := session.DB(DATABASE).C(COLLECTION)
+		c := session.DB(Database).C(Collection)
 
-		err = c.Update(bson.M{"id": id}, &book)
+		err = c.Update(bson.M{"_id": id}, &product)
 		if err != nil {
 			switch err {
 			default:
@@ -197,7 +204,7 @@ func deleteProductById(s *mgo.Session) func(w http.ResponseWriter, r *http.Reque
 
 		id := pat.Param(r, "id")
 
-		c := session.DB(DATABASE).C(COLLECTION)
+		c := session.DB(Database).C(Collection)
 
 		err := c.Remove(bson.M{"id": id})
 		if err != nil {
@@ -216,10 +223,10 @@ func deleteProductById(s *mgo.Session) func(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func api() {
+func main() {
 
 	// Create mongodb connection session
-	session, err := mgo.Dial(URI)
+	session, err := mgo.Dial(MongoUri)
 	if err != nil {
 		panic(err)
 	}
@@ -240,6 +247,5 @@ func api() {
 	mux.HandleFunc(pat.Put("/products/:{id}"), updateProductById(session))
 	mux.HandleFunc(pat.Delete("/products/:{id}"), deleteProductById(session))
 
-	// Server
-	http.ListenAndServe("localhost:8080", mux)
+	log.Fatal(http.ListenAndServe("localhost:8080", mux))
 }
